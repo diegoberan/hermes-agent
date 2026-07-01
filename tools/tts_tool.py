@@ -464,6 +464,43 @@ def _resolve_command_provider_config(
     return None
 
 
+def _is_http_provider_config(config: Dict[str, Any]) -> bool:
+    """Return True when *config* declares an http-type provider.
+
+    Unlike command providers (where ``type`` is implied by the presence
+    of a ``command`` key), http providers require an explicit
+    ``type: http`` -- ``url`` alone is too generic a field name to infer
+    intent from safely.
+    """
+    if not isinstance(config, dict):
+        return False
+    ptype = str(config.get("type") or "").strip().lower()
+    if ptype != "http":
+        return False
+    url = config.get("url")
+    return isinstance(url, str) and bool(url.strip())
+
+
+def _resolve_http_provider_config(
+    provider: str,
+    tts_config: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return the provider config if *provider* resolves to an http type.
+
+    Mirrors _resolve_command_provider_config(): built-in names are
+    rejected, unknown/non-http names return None.
+    """
+    if not provider:
+        return None
+    key = provider.lower().strip()
+    if key in BUILTIN_TTS_PROVIDERS:
+        return None
+    config = _get_named_provider_config(tts_config, key)
+    if _is_http_provider_config(config):
+        return config
+    return None
+
+
 def _dispatch_to_plugin_provider(
     text: str,
     output_path: str,
@@ -866,6 +903,92 @@ def _generate_command_tts(
                 f"TTS provider '{provider_name}' exited with code "
                 f"{exc.returncode}: {detail}"
             ) from exc
+
+    if not output.exists() or output.stat().st_size <= 0:
+        raise RuntimeError(
+            f"TTS provider '{provider_name}' produced no output at {output}"
+        )
+    return str(output)
+
+
+def _generate_http_tts(
+    text: str,
+    output_path: str,
+    provider_name: str,
+    config: Dict[str, Any],
+    tts_config: Dict[str, Any],
+) -> str:
+    """Generate speech by calling a generic HTTP TTS endpoint.
+
+    The response body is written verbatim as the audio file -- this
+    targets self-hosted / simple TTS servers that return raw audio bytes
+    directly (a home-GPU or self-hosted engine's typical shape), not APIs
+    that wrap audio in a JSON+base64 envelope (those already have
+    dedicated builtin providers: elevenlabs, openai, ...).
+
+    Config fields: ``url`` (required), ``method`` (POST, default, or GET),
+    ``headers`` (dict, e.g. auth), ``body`` (dict merged into the request
+    payload/params), ``text_field`` (which key carries the text, default
+    "text"). Shares ``timeout``/``output_format``/``voice_compatible``
+    with command providers via the same helper functions.
+
+    Returns the absolute path of the audio file written. Raises
+    ``ValueError`` when the provider config is invalid, and
+    ``RuntimeError`` for timeouts / non-2xx responses / empty output.
+    """
+    url = str(config.get("url") or "").strip()
+    if not url:
+        raise ValueError(f"tts.providers.{provider_name}.url is not configured")
+
+    method = str(config.get("method") or "POST").strip().upper()
+    if method not in ("POST", "GET"):
+        raise ValueError(
+            f"tts.providers.{provider_name}.method must be POST or GET, got {method!r}"
+        )
+
+    headers_cfg = config.get("headers")
+    headers = dict(headers_cfg) if isinstance(headers_cfg, dict) else {}
+
+    body_cfg = config.get("body")
+    body = dict(body_cfg) if isinstance(body_cfg, dict) else {}
+    text_field = str(config.get("text_field") or "text")
+    body[text_field] = text
+
+    timeout = _get_command_tts_timeout(config)
+
+    output = Path(output_path).expanduser()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.exists():
+        output.unlink()
+
+    import requests
+
+    try:
+        if method == "GET":
+            response = requests.get(url, params=body, headers=headers, timeout=timeout)
+        else:
+            response = requests.post(url, json=body, headers=headers, timeout=timeout)
+    except requests.exceptions.Timeout as exc:
+        raise RuntimeError(
+            f"TTS provider '{provider_name}' timed out after {timeout:g}s"
+        ) from exc
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(
+            f"TTS provider '{provider_name}' request failed: {exc}"
+        ) from exc
+
+    if response.status_code < 200 or response.status_code >= 300:
+        raise RuntimeError(
+            f"TTS provider '{provider_name}' returned HTTP {response.status_code}: "
+            f"{response.text[:200]}"
+        )
+
+    if not response.content:
+        raise RuntimeError(
+            f"TTS provider '{provider_name}' returned an empty response"
+        )
+
+    output.write_bytes(response.content)
 
     if not output.exists() or output.stat().st_size <= 0:
         raise RuntimeError(
@@ -2191,11 +2314,13 @@ def _synthesize_with_provider(
     this over the provider chain from SpeechRouter and stops at the first
     success.
     """
-    # User-declared command provider (type: command under tts.providers.<name>)
-    # resolves BEFORE the built-in dispatch. Built-in names short-circuit here
-    # so a user's ``tts.providers.openai.command`` can't override the real
-    # OpenAI handler.
+    # User-declared provider (type: command or type: http under
+    # tts.providers.<name>) resolves BEFORE the built-in dispatch. Built-in
+    # names short-circuit here so a user's ``tts.providers.openai.command``
+    # can't override the real OpenAI handler.
     command_provider_config = _resolve_command_provider_config(provider, tts_config)
+    http_provider_config = _resolve_http_provider_config(provider, tts_config)
+    declared_provider_config = command_provider_config or http_provider_config
 
     # Truncate very long text with a warning. The cap is per-provider
     # (OpenAI 4096, xAI 15k, MiniMax 10k, ElevenLabs model-aware, etc.).
@@ -2236,19 +2361,19 @@ def _synthesize_with_provider(
                 ),
             }, ensure_ascii=False)
         file_path = Path(output_path).expanduser()
-        if command_provider_config is not None:
+        if declared_provider_config is not None:
             # Respect caller-supplied path but align the extension with the
-            # provider's configured output_format so the command writes to a
-            # path the caller actually expects.
+            # provider's configured output_format so the command/http call
+            # writes to a path the caller actually expects.
             file_path = _configured_command_tts_output_path(
-                file_path, command_provider_config
+                file_path, declared_provider_config
             )
     else:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(DEFAULT_OUTPUT_DIR)
         out_dir.mkdir(parents=True, exist_ok=True)
-        if command_provider_config is not None:
-            fmt = _get_command_tts_output_format(command_provider_config)
+        if declared_provider_config is not None:
+            fmt = _get_command_tts_output_format(declared_provider_config)
             file_path = out_dir / f"tts_{timestamp}.{fmt}"
         # Use .ogg for Telegram with providers that support native Opus output,
         # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
@@ -2269,6 +2394,14 @@ def _synthesize_with_provider(
             )
             file_str = _generate_command_tts(
                 text, file_str, provider, command_provider_config, tts_config,
+            )
+
+        elif http_provider_config is not None:
+            logger.info(
+                "Generating speech with HTTP TTS provider '%s'...", provider,
+            )
+            file_str = _generate_http_tts(
+                text, file_str, provider, http_provider_config, tts_config,
             )
 
         # Plugin-registered TTS backend (issue #30398). Fires when the
@@ -2409,11 +2542,11 @@ def _synthesize_with_provider(
         # formats for local/CLI playback and only convert when the current
         # platform actually needs Opus voice delivery.
         voice_compatible = False
-        if command_provider_config is not None:
-            # Command providers are documents by default. Voice-bubble
+        if declared_provider_config is not None:
+            # Command/HTTP providers are documents by default. Voice-bubble
             # delivery only kicks in when the user explicitly opts in
             # via ``voice_compatible: true`` in their provider config.
-            if _is_command_tts_voice_compatible(command_provider_config):
+            if _is_command_tts_voice_compatible(declared_provider_config):
                 if not file_str.endswith(".ogg"):
                     opus_path = _convert_to_opus(file_str)
                     if opus_path:

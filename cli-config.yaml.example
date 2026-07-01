@@ -925,9 +925,28 @@ platform_toolsets:
 #   # any failure (timeout, missing package, API error). Omit "router"
 #   # entirely to keep the single-provider behavior above -- fallback is
 #   # opt-in, never automatic. Each name must be a builtin ("edge",
-#   # "elevenlabs", ...) or a tts.providers.<name> command/plugin entry.
+#   # "elevenlabs", ...) or a tts.providers.<name> command/http/plugin entry.
 #   router:
 #     providers: ["home-gpu", "elevenlabs", "edge"]
+#
+#   # A self-hosted TTS server reachable over HTTP -- no shell script
+#   # needed (see "command" above for the general-purpose alternative).
+#   # The response body is written verbatim as the audio file, so this
+#   # targets servers that return raw audio bytes directly, not JSON+
+#   # base64 APIs (those already have dedicated builtin providers).
+#   providers:
+#     home-gpu:
+#       type: "http"
+#       url: "https://tts.example.com/speak"
+#       method: "POST"           # POST (default) | GET
+#       text_field: "text"       # which body/query key carries the text
+#       headers:
+#         Authorization: "Bearer ..."
+#       body:
+#         voice: "my-cloned-voice"  # merged alongside text_field
+#       timeout: 10
+#       output_format: "wav"
+#       voice_compatible: true
 
 # =============================================================================
 # Voice Transcription (Speech-to-Text)
