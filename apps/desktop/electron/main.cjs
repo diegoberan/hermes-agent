@@ -3273,6 +3273,50 @@ function fetchJson(url, token, options = {}) {
   })
 }
 
+function synthesizeLocalSpeech(text) {
+  // MVP for the "desktop-session" Speech Provider (Speech Router RFC PR6):
+  // the Gateway asked THIS desktop to synthesize `text` because it's
+  // connected and has a local GPU/TTS server. Talks to dot-tts-local
+  // (D:\dot-tts-local\server.py) on loopback -- same contract the mitm
+  // read-aloud path already uses, just called directly instead of
+  // intercepted. Not user-configurable yet: hardcoded per the MVP scope
+  // (proves the RPC path works before generalizing to a settings field).
+  const LOCAL_TTS_URL = 'http://127.0.0.1:8123/speak'
+  const LOCAL_TTS_TOKEN = process.env.DOT_TTS_LOCAL_TOKEN || 'dotlocal-7f3a9c21b8e4'
+
+  return new Promise(resolve => {
+    const body = Buffer.from(JSON.stringify({ token: LOCAL_TTS_TOKEN, text }))
+    const parsed = new URL(LOCAL_TTS_URL)
+
+    const req = http.request(
+      parsed,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': String(body.length) }
+      },
+      res => {
+        const chunks = []
+        res.on('error', err => resolve({ ok: false, error: String(err?.message || err) }))
+        res.on('data', chunk => chunks.push(chunk))
+        res.on('end', () => {
+          if ((res.statusCode || 500) >= 400) {
+            resolve({ ok: false, error: `local tts http ${res.statusCode}` })
+            return
+          }
+          resolve({ ok: true, audioBase64: Buffer.concat(chunks).toString('base64') })
+        })
+      }
+    )
+
+    req.on('error', err => resolve({ ok: false, error: String(err?.message || err) }))
+    req.setTimeout(30_000, () => {
+      req.destroy(new Error('Timed out reaching local TTS server'))
+    })
+    req.write(body)
+    req.end()
+  })
+}
+
 function fetchPublicJson(url, options = {}) {
   // Credential-free JSON GET/POST for public gateway endpoints
   // (``/api/status``, ``/api/auth/providers``). Unlike ``fetchJson`` it sends
@@ -6323,6 +6367,12 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
 
   return systemPreferences.askForMediaAccess('microphone')
 })
+
+// desktop-session Speech Provider MVP. Runs in the main process (not the
+// renderer) because dot-tts-local doesn't send CORS headers -- a renderer
+// fetch() would be blocked by webSecurity. Node's http here has no such
+// restriction.
+ipcMain.handle('hermes:speech:synthesizeLocal', async (_event, text) => synthesizeLocalSpeech(text))
 
 // Re-route remote-profile session requests to the owning remote backend. Returns
 // `undefined` when not interceptable (caller takes the normal local path), else

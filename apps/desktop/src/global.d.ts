@@ -33,6 +33,9 @@ declare global {
       openSessionWindow: (sessionId: string, opts?: { watch?: boolean }) => Promise<{ ok: boolean; error?: string }>
       // Open (or focus) a compact secondary window on the new-session draft.
       openNewSessionWindow: () => Promise<{ ok: boolean; error?: string }>
+      // desktop-session Speech Provider MVP: main process calls dot-tts-local
+      // (loopback, no CORS issue there) and hands back base64 WAV bytes.
+      synthesizeLocalSpeech: (text: string) => Promise<{ ok: boolean; audioBase64?: string; error?: string }>
       // The pop-out pet overlay: a transparent always-on-top window hosting only
       // the mascot. The main renderer drives it (open/close/drag + state push);
       // the overlay sends control messages back (pop-in, composer submit).

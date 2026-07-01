@@ -536,6 +536,33 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
             text: result ? JSON.stringify(result) : ''
           })
         }
+      } else if (event.type === 'speech.synthesize.request') {
+        // desktop-session Speech Provider MVP (Speech Router RFC PR6): the
+        // Gateway is asking THIS desktop to synthesize locally (its own
+        // GPU/TTS server) instead of exposing that server over HTTP. Python
+        // side blocks in request_desktop_speech() until speech.synthesize.response
+        // lands (tui_gateway/server.py). Fire-and-forget here, same shape as
+        // terminal.read.request below -- no UI overlay, just compute and answer.
+        const requestId = typeof payload?.request_id === 'string' ? payload.request_id : ''
+        const text = typeof payload?.text === 'string' ? payload.text : ''
+
+        if (requestId) {
+          void window.hermesDesktop
+            .synthesizeLocalSpeech(text)
+            .then(result => {
+              void $gateway.get()?.request('speech.synthesize.response', {
+                request_id: requestId,
+                success: Boolean(result?.ok),
+                audio_base64: result?.ok ? result.audioBase64 : undefined
+              })
+            })
+            .catch(() => {
+              void $gateway.get()?.request('speech.synthesize.response', {
+                request_id: requestId,
+                success: false
+              })
+            })
+        }
       } else if (event.type === 'agent.terminal.output') {
         // Live chunk from a background process → its read-only agent terminal tab.
         writeAgentTerminalChunk(payload?.process_id ?? '', payload?.chunk ?? '')
