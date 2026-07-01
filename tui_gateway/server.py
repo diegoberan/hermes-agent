@@ -1911,6 +1911,29 @@ _pending_speech: dict[str, threading.Event] = {}
 _speech_answers: dict[str, dict] = {}
 _speech_lock = threading.Lock()
 
+# Live WS clients (Desktop app, dashboard chat, TUI-over-WS), most recent
+# last. Registered by tui_gateway/ws.py on accept, removed on disconnect.
+# Session contextvars are NOT set inside tui_gateway turn threads (only the
+# messaging gateway calls set_session_vars), so a session-id lookup can't
+# find the Desktop -- this registry can, and it also works when the TTS
+# request originates from a session other than the Desktop's own.
+_ws_clients: list = []
+_ws_clients_lock = threading.Lock()
+
+
+def register_ws_client(transport) -> None:
+    with _ws_clients_lock:
+        if transport not in _ws_clients:
+            _ws_clients.append(transport)
+
+
+def unregister_ws_client(transport) -> None:
+    with _ws_clients_lock:
+        try:
+            _ws_clients.remove(transport)
+        except ValueError:
+            pass
+
 
 def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
     """Ask the Desktop bound to the current request context to synthesize
@@ -1920,37 +1943,34 @@ def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
     """
     import base64
 
-    from gateway.session_context import get_session_env
-
-    # current_transport() is only bound for the duration of dispatch()'s
-    # inline RPC handling -- the real agent turn (where tool calls like
-    # this one happen) runs on the session's own task/thread, which does
-    # NOT inherit it (confirmed empirically: PR6-DIAG logged transport=None
-    # on a live desktop-session attempt). HERMES_SESSION_ID is the
-    # session-scoped contextvar that DOES survive into tool execution
-    # (gateway/session_context.py, already relied on elsewhere in
-    # tts_tool.py for platform detection) -- use it to look up the
-    # session's transport, captured once at session-init time.
-    sid = get_session_env("HERMES_SESSION_ID")
-    transport = _sessions.get(sid, {}).get("transport") if sid else None
-    if transport is None:
-        transport = current_transport()
-    if transport is None:
-        return None
+    with _ws_clients_lock:
+        clients = list(_ws_clients)
+    if not clients:
+        fallback = current_transport()
+        if fallback is None:
+            return None
+        clients = [fallback]
 
     rid = uuid.uuid4().hex[:8]
     ev = threading.Event()
     with _speech_lock:
         _pending_speech[rid] = ev
     try:
-        transport.write({
+        frame = {
             "jsonrpc": "2.0",
             "method": "event",
             "params": {
                 "type": "speech.synthesize.request",
                 "payload": {"text": text, "request_id": rid},
             },
-        })
+        }
+        # Broadcast to every live client; non-Desktop clients ignore the
+        # event, the first speech.synthesize.response for this rid wins.
+        for client in clients:
+            try:
+                client.write(frame)
+            except Exception:
+                pass
         ev.wait(timeout=timeout)
     finally:
         with _speech_lock:
