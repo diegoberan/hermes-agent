@@ -1155,6 +1155,16 @@ _MEDIA_CONTENT_TYPES = {
     ".svg": "image/svg+xml",
     ".bmp": "image/bmp",
     ".ico": "image/x-icon",
+    # Audio -- lets a remote Desktop play TTS output (dot-modal,
+    # desktop-session) inline instead of falling through to the
+    # hermes-media:// local-file-only stream, which 404s when the
+    # gateway is remote (see markdown-text.tsx mediaSrc()).
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".flac": "audio/flac",
 }
 _MEDIA_MAX_BYTES = 25 * 1024 * 1024
 _MANAGED_FILES_ROOT_ENV = "HERMES_DASHBOARD_FILES_ROOT"
@@ -1360,7 +1370,7 @@ def _media_serve_roots() -> list[Path]:
     allowlist.
     """
     home = get_hermes_home()
-    roots = [home / "images", home / "screenshots", home / "cache"]
+    roots = [home / "images", home / "screenshots", home / "cache", home / "audio_cache"]
     out: list[Path] = []
     for root in roots:
         try:
