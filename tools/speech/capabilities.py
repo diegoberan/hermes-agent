@@ -154,6 +154,17 @@ BUILTIN_CAPABILITIES: Dict[str, SpeechCapabilities] = {
         latency_estimate_ms=None,
         priority=70,
     ),
+    "desktop-session": SpeechCapabilities(
+        local=True,  # synthesized on whatever GPU the connected Hermes Desktop has
+        streaming=False,  # request_desktop_speech() waits for one full WAV response
+        voice_clone=True,  # dot-tts-local (D:\dot-tts-local\server.py) is F5-TTS with an 8s reference clip
+        multiple_voices=False,  # MVP: single hardcoded voice token on the Desktop side
+        ssml=False,
+        realtime=False,
+        languages="en",  # dot-tts-local translates other input languages to English before synthesis
+        latency_estimate_ms=2500,  # observed end-to-end for a ~3-sentence phrase via the same local server over HTTP
+        priority=15,
+    ),
 }
 
 

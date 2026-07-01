@@ -1899,6 +1899,71 @@ def _clear_pending(sid: str | None = None) -> None:
                 ev.set()
 
 
+# ── Desktop-session speech provider (MVP) ─────────────────────────────
+# Lets a connected Hermes Desktop act as a Speech Provider: instead of
+# exposing a local TTS server over HTTP, the Gateway asks the Desktop
+# bound to the CURRENT request context (via current_transport() -- the
+# same contextvar every dispatch() call already binds, see
+# tui_gateway/transport.py) to synthesize locally, and waits for the
+# audio back over the same WS connection. MVP assumes a single connected
+# Desktop; see tools/tts_tool.py's "desktop-session" provider.
+_pending_speech: dict[str, threading.Event] = {}
+_speech_answers: dict[str, dict] = {}
+_speech_lock = threading.Lock()
+
+
+def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
+    """Ask the Desktop bound to the current request context to synthesize
+    *text* locally. Returns WAV bytes, or None on any failure (no
+    connected Desktop, timeout, or the Desktop reporting an error) --
+    callers treat None exactly like any other provider failure.
+    """
+    import base64
+
+    transport = current_transport()
+    if transport is None:
+        return None
+
+    rid = uuid.uuid4().hex[:8]
+    ev = threading.Event()
+    with _speech_lock:
+        _pending_speech[rid] = ev
+    try:
+        transport.write({
+            "jsonrpc": "2.0",
+            "method": "event",
+            "params": {
+                "type": "speech.synthesize.request",
+                "payload": {"text": text, "request_id": rid},
+            },
+        })
+        ev.wait(timeout=timeout)
+    finally:
+        with _speech_lock:
+            _pending_speech.pop(rid, None)
+
+    with _speech_lock:
+        result = _speech_answers.pop(rid, None)
+    if not result or not result.get("success") or not result.get("audio_base64"):
+        return None
+    try:
+        return base64.b64decode(result["audio_base64"])
+    except Exception:
+        return None
+
+
+@method("speech.synthesize.response")
+def _(rid, params: dict) -> dict:
+    r = params.get("request_id", "")
+    with _speech_lock:
+        ev = _pending_speech.get(r)
+        if not ev:
+            return _err(rid, 4009, "no pending speech request")
+        _speech_answers[r] = params
+        ev.set()
+    return _ok(rid, {"status": "ok"})
+
+
 # ── Agent factory ────────────────────────────────────────────────────
 
 

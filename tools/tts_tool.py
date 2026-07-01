@@ -392,6 +392,7 @@ BUILTIN_TTS_PROVIDERS = frozenset({
     "neutts",
     "kittentts",
     "piper",
+    "desktop-session",
 })
 
 DEFAULT_COMMAND_TTS_TIMEOUT_SECONDS = 120
@@ -2288,6 +2289,29 @@ def _generate_kittentts(text: str, output_path: str, tts_config: Dict[str, Any])
     return output_path
 
 
+def _generate_desktop_session_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> None:
+    """MVP desktop-session provider.
+
+    Asks the connected Hermes Desktop to synthesize *text* locally (its
+    own GPU/TTS server) over the existing Gateway<->Desktop RPC
+    connection, instead of exposing that server over HTTP. See
+    tui_gateway/server.py:request_desktop_speech() for the wire side.
+    Single-desktop MVP: fails loudly (caught by the caller's try/except)
+    when no Desktop is connected or it can't synthesize.
+    """
+    from tui_gateway.server import request_desktop_speech
+
+    timeout = _get_provider_section(tts_config, "desktop_session").get("timeout", 30)
+    audio = request_desktop_speech(text, timeout=float(timeout or 30))
+    if not audio:
+        raise RuntimeError(
+            "No Hermes Desktop connected (or it failed to synthesize) -- "
+            "the desktop-session provider needs an active Desktop session."
+        )
+    with open(output_path, "wb") as f:
+        f.write(audio)
+
+
 # ===========================================================================
 # Main tool function
 # ===========================================================================
@@ -2417,6 +2441,10 @@ def _synthesize_with_provider(
         # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
         elif want_opus and provider in {"openai", "elevenlabs", "mistral", "gemini"}:
             file_path = out_dir / f"tts_{timestamp}.ogg"
+        elif provider == "desktop-session":
+            # dot-tts-local (and any local server this MVP talks to) always
+            # returns WAV -- see request_desktop_speech().
+            file_path = out_dir / f"tts_{timestamp}.wav"
         else:
             file_path = out_dir / f"tts_{timestamp}.mp3"
 
@@ -2538,6 +2566,10 @@ def _synthesize_with_provider(
                 }, ensure_ascii=False)
             logger.info("Generating speech with Piper (local)...")
             _generate_piper_tts(text, file_str, tts_config)
+
+        elif provider == "desktop-session":
+            logger.info("Generating speech via connected Hermes Desktop (desktop-session)...")
+            _generate_desktop_session_tts(text, file_str, tts_config)
 
         else:
             # Default: Edge TTS (free), with NeuTTS as local fallback
