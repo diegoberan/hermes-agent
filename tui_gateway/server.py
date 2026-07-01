@@ -8796,6 +8796,38 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any) -> None:
                     result.get("failed") or result.get("partial")
                 ):
                     raw = f"Error: {result.get('error')}"
+
+                # gateway/run.py (the messaging-platform runner) auto-appends
+                # MEDIA: tags from producer-tool results (TTS, image_generate)
+                # onto the model's final text, because the model's own reply
+                # usually doesn't include them verbatim. tui_gateway never had
+                # this -- Desktop/TUI turns go through agent.run_conversation()
+                # directly, bypassing that post-processing entirely, so a
+                # generated audio/image file silently had nothing to render it
+                # (no MEDIA: tag ever reached the client, regardless of what
+                # markdown-text.tsx / mediaSrc() can resolve). Reuse the exact
+                # same detection here instead of duplicating the regex/allowlist.
+                if "MEDIA:" not in raw:
+                    from gateway.run import (
+                        _collect_auto_append_media_tags,
+                        _collect_history_media_paths,
+                    )
+                    _media_tags, _has_voice_directive = _collect_auto_append_media_tags(
+                        result.get("messages", []),
+                        history_offset=len(history),
+                        history_media_paths=_collect_history_media_paths(history),
+                    )
+                    if _media_tags:
+                        _seen_tags = set()
+                        _unique_tags = []
+                        for _tag in _media_tags:
+                            if _tag not in _seen_tags:
+                                _seen_tags.add(_tag)
+                                _unique_tags.append(_tag)
+                        if _has_voice_directive:
+                            _unique_tags.insert(0, "[[audio_as_voice]]")
+                        raw = raw + "\n" + "\n".join(_unique_tags)
+
                 lr = result.get("last_reasoning")
                 if isinstance(lr, str) and lr.strip():
                     last_reasoning = lr.strip()
