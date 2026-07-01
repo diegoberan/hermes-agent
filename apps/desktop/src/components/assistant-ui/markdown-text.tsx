@@ -110,16 +110,21 @@ async function mediaSrc(path: string): Promise<string> {
     return path
   }
 
-  // Stream audio/video through the custom protocol: data URLs are capped and
-  // load the whole file into memory, which broke playback for larger videos.
-  if (window.hermesDesktop && ['audio', 'video'].includes(mediaKind(path))) {
-    return mediaStreamUrl(path)
-  }
-
-  // Remote gateway: the image lives on the gateway machine, so read it over the
-  // authenticated API rather than this machine's disk.
+  // Remote gateway: the file lives on the gateway machine (images AND
+  // audio/video), so read it over the authenticated API rather than trying
+  // this machine's disk. Must run BEFORE the audio/video streaming branch
+  // below -- hermes-media://stream/ only resolves local Windows paths, so a
+  // gateway-local audio path (e.g. TTS output) always 404'd there first,
+  // silently falling back to an "open externally" button instead of playing.
   if (window.hermesDesktop && isRemoteGateway()) {
     return gatewayMediaDataUrl(path)
+  }
+
+  // Stream audio/video through the custom protocol: data URLs are capped and
+  // load the whole file into memory, which broke playback for larger videos.
+  // Local-gateway only (remote is handled above).
+  if (window.hermesDesktop && ['audio', 'video'].includes(mediaKind(path))) {
+    return mediaStreamUrl(path)
   }
 
   if (!window.hermesDesktop?.readFileDataUrl) {
