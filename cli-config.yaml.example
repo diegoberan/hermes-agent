@@ -947,6 +947,20 @@ platform_toolsets:
 #       timeout: 10
 #       output_format: "wav"
 #       voice_compatible: true
+#
+#     # "urls" (plural) tries several addresses for the SAME logical
+#     # service in order, first reachable one wins -- e.g. not sure if
+#     # your local TTS server is on 8732 or 8123. Different from
+#     # router.providers above, which is for genuinely different
+#     # backends. "url" and "urls" are mutually exclusive (url wins if
+#     # both are set).
+#     local-speech:
+#       type: "http"
+#       urls:
+#         - "http://127.0.0.1:8732/speak"
+#         - "http://127.0.0.1:8123/speak"
+#       timeout: 2               # discovery should fail fast per candidate
+#       output_format: "wav"
 
 # =============================================================================
 # Voice Transcription (Speech-to-Text)

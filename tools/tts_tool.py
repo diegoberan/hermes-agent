@@ -464,21 +464,42 @@ def _resolve_command_provider_config(
     return None
 
 
+def _get_http_provider_urls(config: Dict[str, Any]) -> list[str]:
+    """Return candidate URLs for an http provider, in try-order.
+
+    ``url`` (a single string) and ``urls`` (a list) are both accepted;
+    ``urls`` lets one provider declare several candidate addresses for
+    the *same* logical endpoint (e.g. "my local TTS server, port 8732
+    or 8123, not sure which") without duplicating headers/body across
+    multiple tts.router.providers entries -- that list is for genuinely
+    different backends, this is for "one service, a few possible
+    addresses". Empty/blank entries are dropped.
+    """
+    if not isinstance(config, dict):
+        return []
+    single = config.get("url")
+    if isinstance(single, str) and single.strip():
+        return [single.strip()]
+    multiple = config.get("urls")
+    if isinstance(multiple, list):
+        return [u.strip() for u in multiple if isinstance(u, str) and u.strip()]
+    return []
+
+
 def _is_http_provider_config(config: Dict[str, Any]) -> bool:
     """Return True when *config* declares an http-type provider.
 
     Unlike command providers (where ``type`` is implied by the presence
     of a ``command`` key), http providers require an explicit
-    ``type: http`` -- ``url`` alone is too generic a field name to infer
-    intent from safely.
+    ``type: http`` -- ``url``/``urls`` alone is too generic a field name
+    to infer intent from safely.
     """
     if not isinstance(config, dict):
         return False
     ptype = str(config.get("type") or "").strip().lower()
     if ptype != "http":
         return False
-    url = config.get("url")
-    return isinstance(url, str) and bool(url.strip())
+    return bool(_get_http_provider_urls(config))
 
 
 def _resolve_http_provider_config(
@@ -926,19 +947,25 @@ def _generate_http_tts(
     that wrap audio in a JSON+base64 envelope (those already have
     dedicated builtin providers: elevenlabs, openai, ...).
 
-    Config fields: ``url`` (required), ``method`` (POST, default, or GET),
-    ``headers`` (dict, e.g. auth), ``body`` (dict merged into the request
-    payload/params), ``text_field`` (which key carries the text, default
-    "text"). Shares ``timeout``/``output_format``/``voice_compatible``
-    with command providers via the same helper functions.
+    Config fields: ``url`` (single string) or ``urls`` (list -- tried in
+    order, first reachable one wins; see _get_http_provider_urls for why
+    this differs from the router's provider-level fallback), ``method``
+    (POST, default, or GET), ``headers`` (dict, e.g. auth), ``body``
+    (dict merged into the request payload/params), ``text_field`` (which
+    key carries the text, default "text"). Shares
+    ``timeout``/``output_format``/``voice_compatible`` with command
+    providers via the same helper functions.
 
     Returns the absolute path of the audio file written. Raises
     ``ValueError`` when the provider config is invalid, and
-    ``RuntimeError`` for timeouts / non-2xx responses / empty output.
+    ``RuntimeError`` (from the last-tried candidate) when every URL
+    fails -- timeout / non-2xx response / empty output.
     """
-    url = str(config.get("url") or "").strip()
-    if not url:
-        raise ValueError(f"tts.providers.{provider_name}.url is not configured")
+    urls = _get_http_provider_urls(config)
+    if not urls:
+        raise ValueError(
+            f"tts.providers.{provider_name}.url (or .urls) is not configured"
+        )
 
     method = str(config.get("method") or "POST").strip().upper()
     if method not in ("POST", "GET"):
@@ -963,38 +990,49 @@ def _generate_http_tts(
 
     import requests
 
-    try:
-        if method == "GET":
-            response = requests.get(url, params=body, headers=headers, timeout=timeout)
-        else:
-            response = requests.post(url, json=body, headers=headers, timeout=timeout)
-    except requests.exceptions.Timeout as exc:
-        raise RuntimeError(
-            f"TTS provider '{provider_name}' timed out after {timeout:g}s"
-        ) from exc
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(
-            f"TTS provider '{provider_name}' request failed: {exc}"
-        ) from exc
+    last_error: Optional[Exception] = None
+    for url in urls:
+        try:
+            if method == "GET":
+                response = requests.get(url, params=body, headers=headers, timeout=timeout)
+            else:
+                response = requests.post(url, json=body, headers=headers, timeout=timeout)
+        except requests.exceptions.Timeout as exc:
+            last_error = RuntimeError(
+                f"TTS provider '{provider_name}' ({url}) timed out after {timeout:g}s"
+            )
+            last_error.__cause__ = exc
+            continue
+        except requests.exceptions.RequestException as exc:
+            last_error = RuntimeError(
+                f"TTS provider '{provider_name}' ({url}) request failed: {exc}"
+            )
+            last_error.__cause__ = exc
+            continue
 
-    if response.status_code < 200 or response.status_code >= 300:
-        raise RuntimeError(
-            f"TTS provider '{provider_name}' returned HTTP {response.status_code}: "
-            f"{response.text[:200]}"
-        )
+        if response.status_code < 200 or response.status_code >= 300:
+            last_error = RuntimeError(
+                f"TTS provider '{provider_name}' ({url}) returned HTTP "
+                f"{response.status_code}: {response.text[:200]}"
+            )
+            continue
 
-    if not response.content:
-        raise RuntimeError(
-            f"TTS provider '{provider_name}' returned an empty response"
-        )
+        if not response.content:
+            last_error = RuntimeError(
+                f"TTS provider '{provider_name}' ({url}) returned an empty response"
+            )
+            continue
 
-    output.write_bytes(response.content)
+        output.write_bytes(response.content)
+        if not output.exists() or output.stat().st_size <= 0:
+            last_error = RuntimeError(
+                f"TTS provider '{provider_name}' ({url}) produced no output at {output}"
+            )
+            continue
+        return str(output)
 
-    if not output.exists() or output.stat().st_size <= 0:
-        raise RuntimeError(
-            f"TTS provider '{provider_name}' produced no output at {output}"
-        )
-    return str(output)
+    assert last_error is not None  # urls is non-empty, loop always sets this on failure
+    raise last_error
 
 
 def _has_any_command_tts_provider(tts_config: Optional[Dict[str, Any]] = None) -> bool:
