@@ -1920,7 +1920,21 @@ def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
     """
     import base64
 
-    transport = current_transport()
+    from gateway.session_context import get_session_env
+
+    # current_transport() is only bound for the duration of dispatch()'s
+    # inline RPC handling -- the real agent turn (where tool calls like
+    # this one happen) runs on the session's own task/thread, which does
+    # NOT inherit it (confirmed empirically: PR6-DIAG logged transport=None
+    # on a live desktop-session attempt). HERMES_SESSION_ID is the
+    # session-scoped contextvar that DOES survive into tool execution
+    # (gateway/session_context.py, already relied on elsewhere in
+    # tts_tool.py for platform detection) -- use it to look up the
+    # session's transport, captured once at session-init time.
+    sid = get_session_env("HERMES_SESSION_ID")
+    transport = _sessions.get(sid, {}).get("transport") if sid else None
+    if transport is None:
+        transport = current_transport()
     if transport is None:
         return None
 
