@@ -1546,6 +1546,8 @@ export interface Translations {
       running: (count: number) => string
       cron: string
       openCron: string
+      localServices: string
+      openLocalServices: string
       starmap: string
       openStarmap: string
       turnRunning: string
