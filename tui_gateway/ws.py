@@ -102,6 +102,13 @@ class WSTransport:
         self._pending_tokens: list[str] = []
         self._token_flush_handle: asyncio.TimerHandle | None = None
         self._token_flush_armed = False
+        # Set by the "hermes.capabilities.announce" RPC (tui_gateway/server.py),
+        # sent once by the client right after gateway.ready. None until then --
+        # callers that need to pick a capable client (e.g. the desktop-session
+        # speech provider) treat "never announced" as "unknown, try anyway"
+        # rather than "definitely can't", so older clients that predate this
+        # handshake keep working exactly as before.
+        self.capabilities: dict | None = None
 
     @staticmethod
     def _is_streaming_frame(obj: dict) -> bool:

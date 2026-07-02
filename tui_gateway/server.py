@@ -1935,6 +1935,21 @@ def unregister_ws_client(transport) -> None:
             pass
 
 
+@method("hermes.capabilities.announce")
+def _(rid, params: dict) -> dict:
+    """Client -> Gateway: "here's what I can do locally" (speech today; the
+    payload shape is namespaced per-capability so other kinds can be added
+    later without a schema change). Stored on the calling connection's own
+    WSTransport -- current_transport() is safe here because this handler
+    runs inline under dispatch(), not on a detached agent-turn thread (see
+    request_desktop_speech()'s docstring for why that distinction mattered).
+    """
+    transport = current_transport()
+    if transport is not None:
+        transport.capabilities = params
+    return _ok(rid, {"status": "ok"})
+
+
 def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
     """Ask the Desktop bound to the current request context to synthesize
     *text* locally. Returns WAV bytes, or None on any failure (no
@@ -1944,7 +1959,18 @@ def request_desktop_speech(text: str, timeout: float = 30.0) -> bytes | None:
     import base64
 
     with _ws_clients_lock:
-        clients = list(_ws_clients)
+        all_clients = list(_ws_clients)
+
+    # Prefer clients that explicitly announced speech support. A client that
+    # never announced (older build, or hasn't finished its post-gateway.ready
+    # handshake yet) is neither included nor excluded by this filter -- if
+    # NO client has announced anything, fall back to every connected client
+    # (the pre-handshake MVP behaviour) rather than going straight to "no
+    # Desktop available" during the rollout window.
+    announced = [c for c in all_clients if isinstance(getattr(c, "capabilities", None), dict)]
+    capable = [c for c in announced if (c.capabilities or {}).get("speech", {}).get("available")]
+    clients = capable or (all_clients if not announced else [])
+
     if not clients:
         fallback = current_transport()
         if fallback is None:
