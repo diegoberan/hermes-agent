@@ -7,11 +7,36 @@ import { $gateway } from '@/store/gateway'
 // popover) -- the Gateway's decision of whether to route a synthesis
 // request here should never be more stale than "the last time you flipped
 // the switch," not just "whatever was true when the connection opened."
+// $gateway.set() happens in setActive() (store/gateway.ts), which is not
+// guaranteed to have run yet the instant gateway.ready's handler fires --
+// that event is the server's first message after ws.accept(), and the
+// primary connection's own bookkeeping (setPrimaryGateway then setActive)
+// can still be mid-flight at that exact tick. A few short retries is
+// simpler and more robust than chasing the exact ordering.
+async function waitForGateway(): Promise<ReturnType<typeof $gateway.get>> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const gateway = $gateway.get()
+
+    if (gateway) {
+      return gateway
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 200))
+  }
+
+  return $gateway.get()
+}
+
 export async function announceSpeechCapabilities(): Promise<void> {
   const bridge = window.hermesDesktop?.localServices
-  const gateway = $gateway.get()
 
-  if (!bridge || !gateway) {
+  if (!bridge) {
+    return
+  }
+
+  const gateway = await waitForGateway()
+
+  if (!gateway) {
     return
   }
 
