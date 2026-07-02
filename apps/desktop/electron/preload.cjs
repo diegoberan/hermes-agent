@@ -9,6 +9,13 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
   openNewSessionWindow: () => ipcRenderer.invoke('hermes:window:openNewSession'),
   // desktop-session Speech Provider MVP (Speech Router RFC PR6).
   synthesizeLocalSpeech: text => ipcRenderer.invoke('hermes:speech:synthesizeLocal', text),
+  // Local Services: background processes this Desktop can start/stop/health-check.
+  localServices: {
+    list: () => ipcRenderer.invoke('hermes:local-services:list'),
+    start: id => ipcRenderer.invoke('hermes:local-services:start', id),
+    stop: id => ipcRenderer.invoke('hermes:local-services:stop', id),
+    status: id => ipcRenderer.invoke('hermes:local-services:status', id)
+  },
   petOverlay: {
     // Main renderer → main process: window lifecycle + drag. `request` is
     // `{ bounds, screen }`; resolves with the screen bounds it actually used.

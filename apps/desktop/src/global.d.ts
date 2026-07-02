@@ -7,6 +7,22 @@ import type {
 
 export {}
 
+// A background process this Desktop can manage. `kind` is a free string
+// (only "speech" exists today) so future local integrations -- vision,
+// embeddings, whatever -- reuse the same descriptor shape instead of a
+// TTS-specific schema.
+interface LocalServiceDescriptor {
+  id: string
+  name: string
+  kind: string
+  command: string
+  args: string[]
+  cwd?: string
+  healthUrl?: string
+  autoStart: boolean
+  capabilities?: Record<string, unknown>
+}
+
 declare global {
   interface Window {
     hermesDesktop: {
@@ -36,6 +52,15 @@ declare global {
       // desktop-session Speech Provider MVP: main process calls dot-tts-local
       // (loopback, no CORS issue there) and hands back base64 WAV bytes.
       synthesizeLocalSpeech: (text: string) => Promise<{ ok: boolean; audioBase64?: string; error?: string }>
+      // Local Services: background processes this Desktop can start/stop/
+      // health-check (dot-tts-local today; the descriptor shape is generic
+      // so future local integrations reuse the same registry/UI/lifecycle).
+      localServices: {
+        list: () => Promise<LocalServiceDescriptor[]>
+        start: (id: string) => Promise<{ ok: boolean; error?: string }>
+        stop: (id: string) => Promise<{ ok: boolean; error?: string }>
+        status: (id: string) => Promise<{ running: boolean; healthy: boolean }>
+      }
       // The pop-out pet overlay: a transparent always-on-top window hosting only
       // the mascot. The main renderer drives it (open/close/drag + state push);
       // the overlay sends control messages back (pop-in, composer submit).

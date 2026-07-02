@@ -466,6 +466,141 @@ nativeTheme.themeSource = readPersistedThemeSource()
 // a no-op on Linux. See store/translucency.
 const TRANSLUCENCY_CONFIG_PATH = path.join(app.getPath('userData'), 'translucency.json')
 
+// Local Services: background processes this Desktop can start/stop/health-check,
+// each declaring what it can do for the Gateway (today only `kind: "speech"`,
+// but the descriptor shape is generic on purpose -- same pattern for any future
+// local integration, not a one-off TTS special case). Desktop owns the lifecycle
+// of whatever it starts: stopAllManagedLocalServices() runs on quit, and
+// autoStartLocalServices() runs on launch for entries with autoStart: true.
+const LOCAL_SERVICES_CONFIG_PATH = path.join(app.getPath('userData'), 'local-services.json')
+const DEFAULT_LOCAL_SERVICES = [
+  {
+    id: 'dot-tts-local',
+    name: 'TTS Local (Dot)',
+    kind: 'speech',
+    command: 'D:\\dot-tts-local\\f5-env\\Scripts\\python.exe',
+    args: ['-m', 'uvicorn', 'server:app', '--host', '0.0.0.0', '--port', '8123'],
+    cwd: 'D:\\dot-tts-local',
+    healthUrl: 'http://127.0.0.1:8123/health',
+    autoStart: true,
+    capabilities: { speech: { localUrl: 'http://127.0.0.1:8123', voices: ['dot'] } }
+  }
+]
+
+function loadLocalServices() {
+  try {
+    if (fs.existsSync(LOCAL_SERVICES_CONFIG_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(LOCAL_SERVICES_CONFIG_PATH, 'utf8'))
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch (err) {
+    rememberLog(`Failed to read local-services.json, reseeding defaults: ${err.message}`)
+  }
+  saveLocalServices(DEFAULT_LOCAL_SERVICES)
+  return DEFAULT_LOCAL_SERVICES
+}
+
+function saveLocalServices(services) {
+  try {
+    fs.mkdirSync(path.dirname(LOCAL_SERVICES_CONFIG_PATH), { recursive: true })
+    fs.writeFileSync(LOCAL_SERVICES_CONFIG_PATH, JSON.stringify(services, null, 2))
+  } catch (err) {
+    rememberLog(`Failed to save local-services.json: ${err.message}`)
+  }
+}
+
+function findLocalService(id) {
+  return loadLocalServices().find(svc => svc.id === id)
+}
+
+// Processes THIS Desktop instance spawned. A service already running before
+// the Desktop opened (started by hand, or by a previous Desktop instance)
+// is intentionally NOT in this map -- checkLocalServiceHealth() still reports
+// it as running (via the health probe), but stopAllManagedLocalServices()
+// only tears down what this process itself is responsible for.
+const localServiceProcesses = new Map()
+
+function startLocalService(id) {
+  const svc = findLocalService(id)
+  if (!svc) return { ok: false, error: `Unknown local service: ${id}` }
+  if (localServiceProcesses.has(id)) return { ok: true }
+
+  try {
+    const child = spawn(svc.command, svc.args || [], {
+      cwd: svc.cwd || undefined,
+      windowsHide: true,
+      stdio: 'ignore'
+    })
+    child.on('exit', () => {
+      localServiceProcesses.delete(id)
+    })
+    child.on('error', err => {
+      rememberLog(`Local service '${id}' failed to start: ${err.message}`)
+      localServiceProcesses.delete(id)
+    })
+    localServiceProcesses.set(id, child)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) }
+  }
+}
+
+function stopLocalService(id) {
+  const child = localServiceProcesses.get(id)
+  if (!child) return { ok: true }
+  stopBackendChild(child)
+  localServiceProcesses.delete(id)
+  return { ok: true }
+}
+
+function probeHealthUrl(healthUrl) {
+  return new Promise(resolve => {
+    let parsed
+    try {
+      parsed = new URL(healthUrl)
+    } catch {
+      resolve(false)
+      return
+    }
+    const client = parsed.protocol === 'https:' ? https : http
+    const req = client.get(parsed, { timeout: 3000 }, res => {
+      resolve((res.statusCode || 500) >= 200 && (res.statusCode || 500) < 300)
+      res.resume()
+    })
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+  })
+}
+
+async function checkLocalServiceHealth(id) {
+  const svc = findLocalService(id)
+  if (!svc) return { running: false, healthy: false }
+  const healthy = svc.healthUrl ? await probeHealthUrl(svc.healthUrl) : false
+  // A service someone started outside this Desktop (manually, or a prior
+  // instance) still counts as "running" from the health probe alone, even
+  // though it's absent from localServiceProcesses.
+  return { running: healthy || localServiceProcesses.has(id), healthy }
+}
+
+async function autoStartLocalServices() {
+  for (const svc of loadLocalServices()) {
+    if (!svc.autoStart) continue
+    const status = await checkLocalServiceHealth(svc.id)
+    if (!status.healthy) {
+      startLocalService(svc.id)
+    }
+  }
+}
+
+function stopAllManagedLocalServices() {
+  for (const id of Array.from(localServiceProcesses.keys())) {
+    stopLocalService(id)
+  }
+}
+
 function clampIntensity(value) {
   const n = Math.round(Number(value))
 
@@ -3274,14 +3409,17 @@ function fetchJson(url, token, options = {}) {
 }
 
 function synthesizeLocalSpeech(text) {
-  // MVP for the "desktop-session" Speech Provider (Speech Router RFC PR6):
-  // the Gateway asked THIS desktop to synthesize `text` because it's
-  // connected and has a local GPU/TTS server. Talks to dot-tts-local
-  // (D:\dot-tts-local\server.py) on loopback -- same contract the mitm
-  // read-aloud path already uses, just called directly instead of
-  // intercepted. Not user-configurable yet: hardcoded per the MVP scope
-  // (proves the RPC path works before generalizing to a settings field).
-  const LOCAL_TTS_URL = 'http://127.0.0.1:8123/speak'
+  // Speech Provider for the "desktop-session" Speech Router provider. The
+  // Gateway asked THIS desktop to synthesize `text` because it's connected
+  // and has a local GPU/TTS server. Talks to dot-tts-local on loopback --
+  // same contract the mitm read-aloud path already uses, just called
+  // directly instead of intercepted. URL comes from the "dot-tts-local"
+  // Local Service entry (see LOCAL_SERVICES_CONFIG_PATH) so it follows
+  // whatever the user configured/moved it to, falling back to the seeded
+  // default if that entry is missing for any reason.
+  const dotTtsService = findLocalService('dot-tts-local')
+  const localUrl = dotTtsService?.capabilities?.speech?.localUrl || 'http://127.0.0.1:8123'
+  const LOCAL_TTS_URL = `${localUrl.replace(/\/$/, '')}/speak`
   const LOCAL_TTS_TOKEN = process.env.DOT_TTS_LOCAL_TOKEN || 'dotlocal-7f3a9c21b8e4'
 
   return new Promise(resolve => {
@@ -6374,6 +6512,11 @@ ipcMain.handle('hermes:requestMicrophoneAccess', async () => {
 // restriction.
 ipcMain.handle('hermes:speech:synthesizeLocal', async (_event, text) => synthesizeLocalSpeech(text))
 
+ipcMain.handle('hermes:local-services:list', async () => loadLocalServices())
+ipcMain.handle('hermes:local-services:start', async (_event, id) => startLocalService(id))
+ipcMain.handle('hermes:local-services:stop', async (_event, id) => stopLocalService(id))
+ipcMain.handle('hermes:local-services:status', async (_event, id) => checkLocalServiceHealth(id))
+
 // Re-route remote-profile session requests to the owning remote backend. Returns
 // `undefined` when not interceptable (caller takes the normal local path), else
 // the response. Reads tag the profile as ?profile=<name>; mutations carry it in
@@ -7581,6 +7724,7 @@ app.whenReady().then(() => {
   ensureWslWindowsFonts()
   configureSpellChecker()
   registerPowerResumeListeners()
+  void autoStartLocalServices()
   createWindow()
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.
@@ -7651,6 +7795,12 @@ app.on('before-quit', () => {
 
   stopBackendChild(hermesProcess)
   stopAllPoolBackends()
+
+  // Local Services this Desktop started (dot-tts-local, etc.) are owned by
+  // this process now -- stop them on quit rather than leaving them orphaned.
+  // A service that was already running before this Desktop opened (and
+  // that this Desktop never spawned) is left untouched.
+  stopAllManagedLocalServices()
 })
 
 app.on('window-all-closed', () => {
