@@ -11,7 +11,7 @@ export {}
 // (only "speech" exists today) so future local integrations -- vision,
 // embeddings, whatever -- reuse the same descriptor shape instead of a
 // TTS-specific schema.
-interface LocalServiceDescriptor {
+export interface LocalServiceDescriptor {
   id: string
   name: string
   kind: string

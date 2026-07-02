@@ -302,6 +302,7 @@ export const en: Translations = {
       providerAccounts: 'Accounts',
       providerApiKeys: 'API keys',
       gateway: 'Gateway',
+      localServices: 'Local Services',
       apiKeys: 'Tools & Keys',
       keysTools: 'Tools',
       keysSettings: 'Settings',
@@ -576,6 +577,25 @@ export const en: Translations = {
       testFailed: 'Remote gateway test failed',
       applyFailed: 'Could not apply gateway settings',
       saveFailed: 'Could not save gateway settings'
+    },
+    localServices: {
+      title: 'Local Services',
+      intro:
+        'Background processes this Desktop can start, stop, and health-check on your machine — the TTS server your GPU runs is the first one. This app now owns their lifecycle: closing Hermes Desktop stops what it started.',
+      loading: 'Loading local services...',
+      empty: 'No local services configured yet.',
+      unavailableTitle: 'Local services unavailable',
+      unavailableDesc: 'The desktop IPC bridge does not expose local services.',
+      statusHealthy: 'Running',
+      statusUnhealthy: 'Running, not responding',
+      statusStopped: 'Stopped',
+      start: 'Start',
+      stop: 'Stop',
+      starting: 'Starting…',
+      stopping: 'Stopping…',
+      startFailed: 'Could not start this service',
+      stopFailed: 'Could not stop this service',
+      autoStartHint: 'Starts automatically with Hermes Desktop'
     },
     keys: {
       loading: 'Loading API keys and credentials...',

@@ -293,6 +293,7 @@ export const zh: Translations = {
       providerAccounts: '账号',
       providerApiKeys: 'API 密钥',
       gateway: '网关',
+      localServices: '本地服务',
       apiKeys: '工具与密钥',
       keysTools: '工具',
       keysSettings: '设置',
@@ -765,6 +766,24 @@ export const zh: Translations = {
       testFailed: '远程网关测试失败',
       applyFailed: '无法应用网关设置',
       saveFailed: '无法保存网关设置'
+    },
+    localServices: {
+      title: '本地服务',
+      intro: '此设备上可由本应用启动、停止和检查健康状态的后台进程 —— GPU 上运行的语音合成服务是第一个。现在由本应用管理它们的生命周期：关闭 Hermes 桌面端会停止它启动的服务。',
+      loading: '正在加载本地服务...',
+      empty: '尚未配置本地服务。',
+      unavailableTitle: '本地服务不可用',
+      unavailableDesc: '桌面端 IPC 桥接未提供本地服务接口。',
+      statusHealthy: '运行中',
+      statusUnhealthy: '运行中，但无响应',
+      statusStopped: '已停止',
+      start: '启动',
+      stop: '停止',
+      starting: '正在启动…',
+      stopping: '正在停止…',
+      startFailed: '无法启动此服务',
+      stopFailed: '无法停止此服务',
+      autoStartHint: '随 Hermes 桌面端自动启动'
     },
     keys: {
       loading: '正在加载 API 密钥和凭据...',

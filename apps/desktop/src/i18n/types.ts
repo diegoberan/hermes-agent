@@ -263,6 +263,7 @@ export interface Translations {
       providerAccounts: string
       providerApiKeys: string
       gateway: string
+      localServices: string
       apiKeys: string
       keysTools: string
       keysSettings: string
@@ -487,6 +488,24 @@ export interface Translations {
       testFailed: string
       applyFailed: string
       saveFailed: string
+    }
+    localServices: {
+      title: string
+      intro: string
+      loading: string
+      empty: string
+      unavailableTitle: string
+      unavailableDesc: string
+      statusHealthy: string
+      statusUnhealthy: string
+      statusStopped: string
+      start: string
+      stop: string
+      starting: string
+      stopping: string
+      startFailed: string
+      stopFailed: string
+      autoStartHint: string
     }
     keys: {
       loading: string
