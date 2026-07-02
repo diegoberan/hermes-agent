@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import type { LocalServiceDescriptor } from '@/global'
 import { useI18n } from '@/i18n'
 import { Loader2, Play, Square } from '@/lib/icons'
+import { announceSpeechCapabilities } from '@/lib/local-services-capabilities'
 
 type ServiceStatus = { healthy: boolean; running: boolean }
 type PendingAction = 'start' | 'stop' | null
@@ -86,6 +87,7 @@ export function LocalServicesMenuPanel() {
       if (result.ok) {
         const next = await bridge.status(svc.id)
         setStatuses(prev => ({ ...prev, [svc.id]: next }))
+        void announceSpeechCapabilities()
       }
     } finally {
       setPending(prev => ({ ...prev, [svc.id]: null }))

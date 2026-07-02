@@ -10,6 +10,7 @@ import { coerceGatewayText, coerceThinkingText, normalizePersonalityValue } from
 import { playCompletionSound } from '@/lib/completion-sound'
 import { gatewayEventRequiresSessionId } from '@/lib/gateway-events'
 import { triggerHaptic } from '@/lib/haptics'
+import { announceSpeechCapabilities } from '@/lib/local-services-capabilities'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { clearClarifyRequest, setClarifyRequest } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
@@ -103,6 +104,8 @@ export function useGatewayEventHandler(deps: GatewayEventDeps) {
       const isActiveEvent = !!sessionId && sessionId === activeSessionIdRef.current
 
       if (event.type === 'gateway.ready') {
+        void announceSpeechCapabilities()
+
         return
       } else if (event.type === 'session.info') {
         // Apply session-scoped fields when the event targets the active

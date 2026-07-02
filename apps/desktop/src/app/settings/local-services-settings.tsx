@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import type { LocalServiceDescriptor } from '@/global'
 import { useI18n } from '@/i18n'
 import { Cpu, Loader2, Play, Square } from '@/lib/icons'
+import { announceSpeechCapabilities } from '@/lib/local-services-capabilities'
 import { notifyError } from '@/store/notifications'
 
 import { EmptyState, ListRow, LoadingState, Pill, SectionHeading, SettingsContent } from './primitives'
@@ -92,6 +93,7 @@ export function LocalServicesSettings() {
 
       const next = await bridge.status(svc.id)
       setStatuses(prev => ({ ...prev, [svc.id]: next }))
+      void announceSpeechCapabilities()
     } finally {
       setPending(prev => ({ ...prev, [svc.id]: null }))
     }
